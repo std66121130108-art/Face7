@@ -1,10 +1,10 @@
-import sys, os, cv2, numpy as np, pymysql, json, requests, gdown
+import sys, os, cv2, numpy as np, pymysql, json, requests
 from tensorflow.keras.models import load_model
 from datetime import datetime
 from time import time
 
 # --------------------------
-# Base path ของ project
+# path base ของ project
 # --------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -15,50 +15,13 @@ COURSE_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 11110
 print(f"เริ่มเช็คชื่อวิชา: {COURSE_ID}")
 
 # --------------------------
-# โหลด label_map.json จาก GitHub
-# --------------------------
-LABEL_URL = 'https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/label_map.json'  # แก้ลิงค์ตาม repo จริง
-try:
-    r = requests.get(LABEL_URL)
-    r.raise_for_status()
-    label_map = r.json()
-    print("โหลด label_map.json จาก GitHub เรียบร้อย")
-except Exception as e:
-    print("Error โหลด label_map.json:", e)
-    label_map = {}
-
-# --------------------------
-# โหลดโมเดลจาก Google Drive ถ้าไฟล์ยังไม่มี
-# --------------------------
-FACE_MODEL_PATH = os.path.join(BASE_DIR, 'face_model.h5')
-RECOG_MODEL_PATH = os.path.join(BASE_DIR, 'face_recognition_model.h5')
-
-# ใส่ Google Drive ID ของไฟล์
-FACE_MODEL_ID = '1isj1GNME9E_8glCfM0UCeaCLtUVqhd3V'
-RECOG_MODEL_ID = 'YOUR_RECOG_MODEL_FILE_ID'  # ใส่ไฟล์อีกตัว
-
-if not os.path.exists(FACE_MODEL_PATH):
-    print("ดาวน์โหลด face_model.h5 จาก Google Drive...")
-    gdown.download(f'https://drive.google.com/uc?id={FACE_MODEL_ID}', FACE_MODEL_PATH, quiet=False)
-
-if not os.path.exists(RECOG_MODEL_PATH):
-    print("ดาวน์โหลด face_recognition_model.h5 จาก Google Drive...")
-    gdown.download(f'https://drive.google.com/uc?id={RECOG_MODEL_ID}', RECOG_MODEL_PATH, quiet=False)
-
-# --------------------------
-# โหลดโมเดล
-# --------------------------
-model = load_model(RECOG_MODEL_PATH)
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-
-# --------------------------
-# DB config จาก Environment Variables
+# DB config (ปรับให้ตรงกับ DB ภายนอกของคุณ)
 # --------------------------
 db_config = {
-    'host': os.environ.get('DB_HOST', 'localhost'),
-    'user': os.environ.get('DB_USER', 'root'),
-    'password': os.environ.get('DB_PASSWORD', ''),
-    'database': os.environ.get('DB_NAME', 'attendance_system'),
+    'host': 'your_db_host',          # ตัวอย่าง: "db123.host.com"
+    'user': 'cedubruc_attendance_system',
+    'password': 'LS46s3Ue4w75YUdCr9Qd',
+    'database': 'cedubruc_attendance_system',
     'charset': 'utf8mb4'
 }
 
@@ -85,7 +48,31 @@ def save_attendance(student_id):
         conn.close()
 
 # --------------------------
-# ดึง student_map จาก DB
+# ดาวน์โหลด label_map.json จาก Google Drive หากยังไม่มี
+# --------------------------
+LABEL_FILE = os.path.join(BASE_DIR, 'label_map.json')
+LABEL_URL = "https://drive.google.com/uc?export=download&id=1xI1LYLUoAGdFmj7VXLI0fiZUuEIi_Fpy"
+
+if not os.path.exists(LABEL_FILE):
+    print("ดาวน์โหลด label_map.json จาก Google Drive...")
+    r = requests.get(LABEL_URL)
+    with open(LABEL_FILE, "wb") as f:
+        f.write(r.content)
+    print("ดาวน์โหลดสำเร็จ")
+
+# --------------------------
+# โหลด model + label_map
+# --------------------------
+MODEL_PATH = os.path.join(BASE_DIR, 'face_recognition_model.h5')
+model = load_model(MODEL_PATH)
+
+with open(LABEL_FILE, 'r', encoding='utf-8') as f:
+    label_map = json.load(f)
+
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+# --------------------------
+# Map ชื่อนักศึกษากับ student_id
 # --------------------------
 conn = pymysql.connect(**db_config, cursorclass=pymysql.cursors.DictCursor)
 students_map = {}
@@ -96,26 +83,21 @@ with conn.cursor() as cursor:
 conn.close()
 
 # --------------------------
-# เปิด Video file หรือ webcam (deploy ต้องใช้ video file)
+# เปิดกล้องเช็คชื่อ
 # --------------------------
-VIDEO_PATH = os.environ.get('VIDEO_PATH')  # กำหนด path ของ video สำหรับ Render
-if VIDEO_PATH:
-    cap = cv2.VideoCapture(VIDEO_PATH)
-else:
-    cap = cv2.VideoCapture(0)  # สำหรับทดสอบ local
-
+cap = cv2.VideoCapture(0)
 COOLDOWN = 60  # วินาที กัน spam insert DB
 last_seen = {}
 
 # --------------------------
-# ตัวแปรข้อความแจ้งเตือน
+# ตัวแปรสำหรับข้อความแจ้งเตือน
 # --------------------------
 message = ""
 message_time = 0
-MESSAGE_DURATION = 2
+MESSAGE_DURATION = 2  # วินาที
 
 # --------------------------
-# ตัวแปร countdown ปิดกล้อง
+# ตัวแปรสำหรับนับถอยหลังปิดกล้อง
 # --------------------------
 countdown_start = None
 countdown_seconds = 5
@@ -146,7 +128,7 @@ while True:
             result = save_attendance(student_id)
 
             if student_id not in last_seen or now_time - last_seen[student_id] > COOLDOWN:
-                last_seen[student_id] = now_time
+                last_seen[student_id] = now_time  
 
             if result == "inserted":
                 message = f"{name} Present ✅"
@@ -154,6 +136,7 @@ while True:
                 print(f"{name} -> inserted ({confidence*100:.2f}%)")
                 countdown_start = None
                 last_person = name
+
             elif result == "already":
                 message = f"{name} Already Checked In ❌"
                 message_time = time()
@@ -204,6 +187,10 @@ while True:
         print("กดออก -> ปิดกล้องแล้ว...")
         break
 
+# --------------------------
+# ปิดกล้องและหน้าต่างทั้งหมด
+# --------------------------
 cap.release()
 cv2.destroyAllWindows()
+
 print("Q")
