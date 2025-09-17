@@ -1,138 +1,117 @@
-import os
-import numpy as np
-from flask import Flask, request, abort
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, ImageMessage, TextSendMessage
+from flask import Flask, request, jsonify
+import os, cv2, numpy as np, pymysql, json, requests
 from tensorflow.keras.models import load_model
-import cv2
-from io import BytesIO
-import pymysql
 from datetime import datetime
-import pymysql
-
-try:
-    connection = pymysql.connect(
-        host="localhost",
-        user="root",
-        password="",
-        database="attendance_system",
-        cursorclass=pymysql.cursors.DictCursor
-    )
-    print("เชื่อมต่อฐานข้อมูลสำเร็จ")
-except Exception as e:
-    print("เชื่อมต่อฐานข้อมูลไม่สำเร็จ:", e)
-
 
 app = Flask(__name__)
 
-LINE_CHANNEL_ACCESS_TOKEN = 'qnU3pYuGFahNRMWTwvlib3yIWq4VcGCUazqCZRruK5Ul5ExoErS+ToIoOTzcWgh27RNwtDaD+jkEwxQQ4ihBMsxxIJ44r8awy27jxfxHLzfSE8Q5Ol5B9RQU4NkJbYgF4Rb2nuTugnjxojHzMPsi/gdB04t89/1O/w1cDnyilFU='
-LINE_CHANNEL_SECRET = 'fe84396096ee0af9d03a354395623727'
+# --------------------------
+# Base path ของโปรเจกต์
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
-
-# โหลดโมเดลและ cascade
-model = load_model('face_recognition_model.h5')
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-
-DATASET_PATH = 'dataset'
-folder_names = sorted([name for name in os.listdir(DATASET_PATH) if os.path.isdir(os.path.join(DATASET_PATH, name))])
-label_map = {i: folder_names[i] for i in range(len(folder_names))}
-
-# *** Database connection config ***
+# --------------------------
+# DB config (แก้ให้ตรงกับ DB ภายนอกของคุณ)
 db_config = {
-    'host': 'localhost',
-    'user': 'root',  # เปลี่ยนเป็น user ของคุณ
-    'password': '',  # เปลี่ยนเป็น password ของคุณ
-    'database': 'attendance_db',
+    'host': 'YOUR_DB_HOST',  # เช่น db123.host.com
+    'user': 'cedubruc_attendance_system',
+    'password': 'LS46s3Ue4w75YUdCr9Qd',
+    'database': 'cedubruc_attendance_system',
     'charset': 'utf8mb4'
 }
 
-# ตัวอย่าง mapping name -> student info (แก้เป็นฐานข้อมูลจริงหรือดึงจาก DB ก็ได้)
-student_info_map = {
-    'นายสมชาย': {'student_id': 'S001', 'course': 'วิทยาการคอมพิวเตอร์'},
-    'นางสาวสุนีย์': {'student_id': 'S002', 'course': 'วิศวกรรมคอมพิวเตอร์'},
-    # เพิ่มคนอื่นๆ ตาม dataset
-}
+# --------------------------
+# โหลด label_map.json จาก Google Drive หากยังไม่มี
+LABEL_FILE = os.path.join(BASE_DIR, 'label_map.json')
+LABEL_URL = "https://drive.google.com/uc?export=download&id=1xI1LYLUoAGdFmj7VXLI0fiZUuEIi_Fpy"
+if not os.path.exists(LABEL_FILE):
+    print("ดาวน์โหลด label_map.json...")
+    r = requests.get(LABEL_URL)
+    with open(LABEL_FILE, "wb") as f:
+        f.write(r.content)
 
-def save_attendance_to_db(student_id, name, course):
+with open(LABEL_FILE, 'r', encoding='utf-8') as f:
+    label_map = json.load(f)
+
+# --------------------------
+# โหลด model
+MODEL_PATH = os.path.join(BASE_DIR, 'face_recognition_model.h5')
+model = load_model(MODEL_PATH)
+
+# --------------------------
+# Face cascade
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+# --------------------------
+# Map student name -> student_id
+conn = pymysql.connect(**db_config, cursorclass=pymysql.cursors.DictCursor)
+students_map = {}
+with conn.cursor() as cursor:
+    cursor.execute("SELECT student_id, name FROM students")
+    for row in cursor.fetchall():
+        students_map[row['name']] = row['student_id']
+conn.close()
+
+# --------------------------
+# ฟังก์ชันบันทึก attendance
+def save_attendance(student_id, course_id=11110):
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M:%S")
+
+    conn = pymysql.connect(**db_config, cursorclass=pymysql.cursors.DictCursor)
     try:
-        conn = pymysql.connect(**db_config)
         with conn.cursor() as cursor:
-            sql = """
-                INSERT INTO attendance (student_id, name, course, timestamp)
-                VALUES (%s, %s, %s, NOW())
-            """
-            cursor.execute(sql, (student_id, name, course))
+            cursor.execute("SELECT * FROM attendance WHERE student_id=%s AND course_id=%s AND date=%s",
+                           (student_id, course_id, today_str))
+            if cursor.fetchone():
+                return "already"
+            cursor.execute("INSERT INTO attendance (student_id, course_id, date, time_in, status) VALUES (%s,%s,%s,%s,'present')",
+                           (student_id, course_id, today_str, time_str))
             conn.commit()
+            return "inserted"
+    finally:
         conn.close()
-        print(f"บันทึกข้อมูลสำเร็จ: {student_id}, {name}, {course}")
-    except Exception as e:
-        print("Error saving to DB:", e)
 
-def recognize_face_from_image(img):
+# --------------------------
+# Flask route สำหรับรับรูปและเช็คชื่อ
+@app.route('/recognize', methods=['POST'])
+def recognize():
+    if 'image' not in request.files:
+        return jsonify({"error": "No image file"}), 400
+    
+    file = request.files['image']
+    npimg = np.frombuffer(file.read(), np.uint8)
+    img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.1, 5)
-    if len(faces) == 0:
-        return "ไม่พบใบหน้าในภาพ"
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
 
-    (x, y, w, h) = faces[0]
-    face_img = gray[y:y+h, x:x+w]
-    face_resized = cv2.resize(face_img, (100, 100))
-    face_input = face_resized.reshape(1, 100, 100, 1) / 255.0
+    results = []
 
-    prediction = model.predict(face_input)
-    predicted_class = np.argmax(prediction)
-    confidence = np.max(prediction)
+    for (x, y, w, h) in faces:
+        face_img = cv2.resize(gray[y:y+h, x:x+w], (100,100)).reshape(1,100,100,1)/255.0
+        pred = model.predict(face_img)
+        class_idx = np.argmax(pred)
+        confidence = float(np.max(pred))
+        name = label_map.get(str(class_idx), "Unknown")
 
-    if confidence < 0.5:
-        return "ไม่รู้จักใบหน้านี้"
-    else:
-        name = label_map.get(predicted_class, "Unknown")
-        # ถ้ารู้จัก ให้บันทึกเข้า DB
-        info = student_info_map.get(name)
-        if info:
-            save_attendance_to_db(info['student_id'], name, info['course'])
-            return f"ใบหน้านี้คือ {name} (ความมั่นใจ {confidence*100:.2f}%)\nข้อมูลการเข้าเรียนถูกบันทึกแล้ว"
+        if confidence > 0.8 and name in students_map:
+            student_id = students_map[name]
+            status = save_attendance(student_id)
+            results.append({
+                "student": name,
+                "student_id": student_id,
+                "confidence": confidence,
+                "status": status
+            })
         else:
-            return f"ใบหน้านี้คือ {name} (ความมั่นใจ {confidence*100:.2f}%)\nแต่ไม่พบข้อมูลนักเรียนในระบบ"
+            results.append({
+                "student": name,
+                "confidence": confidence,
+                "status": "unknown"
+            })
 
-@app.route("/callback", methods=['POST'])
-def callback():
-    signature = request.headers['X-Line-Signature']
-    body = request.get_data(as_text=True)
+    return jsonify(results)
 
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return 'OK'
-
-@handler.add(MessageEvent, message=ImageMessage)
-def handle_image(event):
-    message_id = event.message.id
-    message_content = line_bot_api.get_message_content(message_id)
-    image_binary = BytesIO(message_content.content)
-
-    img_array = np.frombuffer(image_binary.read(), np.uint8)
-    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-
-    result_text = recognize_face_from_image(img)
-
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=result_text)
-    )
-
-@handler.add(MessageEvent)
-def handle_message(event):
-    # ถ้าไม่ใช่รูปภาพ ตอบบอกรองรับแค่รูปภาพ
-    if not isinstance(event.message, ImageMessage):
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="ตอนนี้รองรับเฉพาะรูปภาพเท่านั้นครับ")
-        )
-
-if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+# --------------------------
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
