@@ -1,4 +1,4 @@
-import sys, os, cv2, numpy as np, pymysql, json, gdown
+import os, cv2, numpy as np, pymysql, json
 from tensorflow.keras.models import load_model
 from datetime import datetime
 from time import time
@@ -9,21 +9,22 @@ from time import time
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --------------------------
-# รับ course_id จาก args
-# --------------------------
-COURSE_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 11110
-print(f"เริ่มเช็คชื่อวิชา: {COURSE_ID}")
-
-# --------------------------
-# DB config (ภายนอก)
+# DB config (ใช้ DB ภายนอก)
 # --------------------------
 db_config = {
-    'host': 'localhost',  # เปลี่ยนเป็น host จริงถ้า DB อยู่ภายนอก
+    'host': 'db.cedubruc.com',  # เปลี่ยนเป็น host จริงของคุณ
     'user': 'cedubruc_attendance_system',
     'password': 'LS46s3Ue4w75YUdCr9Qd',
     'database': 'cedubruc_attendance_system',
     'charset': 'utf8mb4'
 }
+
+# --------------------------
+# รับ course_id จาก args
+# --------------------------
+import sys
+COURSE_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 11110
+print(f"เริ่มเช็คชื่อวิชา: {COURSE_ID}")
 
 # --------------------------
 # ฟังก์ชันบันทึก attendance
@@ -48,23 +49,15 @@ def save_attendance(student_id):
         conn.close()
 
 # --------------------------
-# โหลดไฟล์ model และ label_map จาก Google Drive (ถ้าไม่มี)
+# โหลด model + label_map
 # --------------------------
 MODEL_PATH = os.path.join(BASE_DIR, 'face_model.h5')
 LABEL_PATH = os.path.join(BASE_DIR, 'label_map.json')
 
-if not os.path.exists(MODEL_PATH):
-    print("🔽 โหลด face_model.h5 จาก Google Drive ...")
-    gdown.download('https://drive.google.com/uc?export=download&id=1isj1GNME9E_8glCfM0UCeaCLtUVqhd3V', MODEL_PATH, quiet=False)
-
-if not os.path.exists(LABEL_PATH):
-    print("🔽 โหลด label_map.json จาก Google Drive ...")
-    gdown.download('https://drive.google.com/uc?export=download&id=1Uj0RX0hwtWtc6On0zJDYL-Yci0J5MXOH', LABEL_PATH, quiet=False)
-
-# --------------------------
-# โหลด model + label_map
-# --------------------------
+print("🔽 โหลด face_model.h5 ...")
 model = load_model(MODEL_PATH)
+
+print("🔽 โหลด label_map.json ...")
 with open(LABEL_PATH, 'r', encoding='utf-8') as f:
     label_map = json.load(f)
 
@@ -88,16 +81,9 @@ cap = cv2.VideoCapture(0)
 COOLDOWN = 60  # วินาที กัน spam insert DB
 last_seen = {}
 
-# --------------------------
-# ตัวแปรสำหรับข้อความแจ้งเตือน
-# --------------------------
 message = ""
 message_time = 0
 MESSAGE_DURATION = 2  # วินาที
-
-# --------------------------
-# ตัวแปรสำหรับนับถอยหลังปิดกล้อง
-# --------------------------
 countdown_start = None
 countdown_seconds = 5
 last_person = None
@@ -122,32 +108,34 @@ while True:
 
         if confidence > 0.80 and name in students_map:
             student_id = students_map[name]
-            now_time = time()
+            now = time()
 
-            if student_id not in last_seen or now_time - last_seen[student_id] > COOLDOWN:
-                result = save_attendance(student_id)
-                last_seen[student_id] = now_time
+            result = save_attendance(student_id)
 
-                if result == "inserted":
-                    message = f"{name} Present ✅"
-                    print(f"{name} -> inserted ({confidence*100:.2f}%)")
-                    countdown_start = None
+            if student_id not in last_seen or now - last_seen[student_id] > COOLDOWN:
+                last_seen[student_id] = now  
+
+            if result == "inserted":
+                message = f"{name} Present ✅"
+                message_time = time()
+                print(f"{name} -> inserted ({confidence*100:.2f}%)")
+                countdown_start = None
+                last_person = name
+            elif result == "already":
+                message = f"{name} Already Checked In ❌"
+                message_time = time()
+                print(f"{name} -> already ({confidence*100:.2f}%)")
+                if last_person != name:
+                    countdown_start = time()
                     last_person = name
-                elif result == "already":
-                    message = f"{name} Already Checked In ❌"
-                    print(f"{name} -> already ({confidence*100:.2f}%)")
-                    if last_person != name or countdown_start is None:
-                        countdown_start = time()
-                        last_person = name
+                elif countdown_start is None:
+                    countdown_start = time()
 
         color = (0,255,0) if confidence>0.80 else (0,0,255)
         cv2.rectangle(frame,(x,y),(x+w,y+h),color,2)
         cv2.putText(frame, f"{name} {confidence*100:.2f}%", (x,y-10),
                     cv2.FONT_HERSHEY_SIMPLEX,0.8,color,2)
 
-    # --------------------------
-    # แสดงข้อความแจ้งเตือน
-    # --------------------------
     if message and time() - message_time < MESSAGE_DURATION:
         (tw, th), _ = cv2.getTextSize(message, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)
         x = (frame.shape[1] - tw) // 2
@@ -157,9 +145,6 @@ while True:
     else:
         message = ""
 
-    # --------------------------
-    # แสดง countdown ปิดกล้อง
-    # --------------------------
     if countdown_start:
         elapsed = time() - countdown_start
         remaining = countdown_seconds - int(elapsed)
@@ -180,8 +165,6 @@ while True:
         print("กดออก -> ปิดกล้องแล้ว...")
         break
 
-# --------------------------
-# ปิดกล้องและหน้าต่างทั้งหมด
-# --------------------------
 cap.release()
 cv2.destroyAllWindows()
+print("Q")
