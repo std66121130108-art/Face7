@@ -2,6 +2,7 @@ import sys, os, cv2, numpy as np, pymysql, json
 from tensorflow.keras.models import load_model
 from datetime import datetime
 from time import time
+import gdown
 
 # --------------------------
 # path base ของ project
@@ -52,6 +53,18 @@ def save_attendance(student_id):
 # --------------------------
 MODEL_PATH = os.path.join(BASE_DIR, 'face_recognition_model.h5')
 LABEL_PATH = os.path.join(BASE_DIR, 'label_map.json')
+
+# ดาวน์โหลดโมเดลจาก Google Drive ถ้าไม่พบ
+MODEL_URL = 'https://drive.google.com/uc?export=download&id=1Uj0RX0hwtWtc6On0zJDYL-Yci0J5MXOH'
+if not os.path.exists(MODEL_PATH):
+    print("ดาวน์โหลดโมเดลจาก Google Drive...")
+    gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
+
+# ดาวน์โหลด label_map.json จาก URL ของคุณ (แก้เป็นของจริง)
+LABEL_URL = 'https://raw.githubusercontent.com/username/repo/main/label_map.json'
+if not os.path.exists(LABEL_PATH):
+    print("ดาวน์โหลด label_map.json จาก GitHub...")
+    gdown.download(LABEL_URL, LABEL_PATH, quiet=False)
 
 model = load_model(MODEL_PATH)
 with open(LABEL_PATH, 'r', encoding='utf-8') as f:
@@ -122,15 +135,13 @@ while True:
                 message = f"{name} Present ✅"
                 message_time = time()
                 print(f"{name} -> inserted ({confidence*100:.2f}%)")
-
-                countdown_start = None  # reset ถ้าเจอคนใหม่
+                countdown_start = None
                 last_person = name
 
             elif result == "already":
                 message = f"{name} Already Checked In ❌"
                 message_time = time()
                 print(f"{name} -> already ({confidence*100:.2f}%)")
-
                 if last_person != name:
                     countdown_start = time()
                     last_person = name
@@ -184,3 +195,5 @@ cap.release()
 cv2.destroyAllWindows()
 
 print("Q")
+
+
