@@ -15,13 +15,13 @@ COURSE_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 11110
 print(f"เริ่มเช็คชื่อวิชา: {COURSE_ID}")
 
 # --------------------------
-# DB config
+# DB config (ภายนอก)
 # --------------------------
 db_config = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'attendance_system',
+    'host': 'localhost',  # เปลี่ยนเป็น host จริงถ้า DB อยู่ภายนอก
+    'user': 'cedubruc_attendance_system',
+    'password': 'LS46s3Ue4w75YUdCr9Qd',
+    'database': 'cedubruc_attendance_system',
     'charset': 'utf8mb4'
 }
 
@@ -48,22 +48,18 @@ def save_attendance(student_id):
         conn.close()
 
 # --------------------------
-# โหลดไฟล์โมเดล + label_map จาก Google Drive
+# โหลดไฟล์ model และ label_map จาก Google Drive (ถ้าไม่มี)
 # --------------------------
 MODEL_PATH = os.path.join(BASE_DIR, 'face_model.h5')
 LABEL_PATH = os.path.join(BASE_DIR, 'label_map.json')
 
-# ลิงก์ไฟล์จาก Google Drive (แก้เป็นของสหายเอง)
-MODEL_URL = "https://drive.google.com/uc?export=download&id=1isj1GNME9E_8glCfM0UCeaCLtUVqhd3V"
-LABEL_URL = "https://drive.google.com/uc?export=download&id=1Uj0RX0hwtWtc6On0zJDYL-Yci0J5MXOH"
-
 if not os.path.exists(MODEL_PATH):
     print("🔽 โหลด face_model.h5 จาก Google Drive ...")
-    gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
+    gdown.download('https://drive.google.com/uc?export=download&id=1isj1GNME9E_8glCfM0UCeaCLtUVqhd3V', MODEL_PATH, quiet=False)
 
 if not os.path.exists(LABEL_PATH):
     print("🔽 โหลด label_map.json จาก Google Drive ...")
-    gdown.download(LABEL_URL, LABEL_PATH, quiet=False)
+    gdown.download('https://drive.google.com/uc?export=download&id=1Uj0RX0hwtWtc6On0zJDYL-Yci0J5MXOH', LABEL_PATH, quiet=False)
 
 # --------------------------
 # โหลด model + label_map
@@ -126,31 +122,23 @@ while True:
 
         if confidence > 0.80 and name in students_map:
             student_id = students_map[name]
-            now = time()
+            now_time = time()
 
-            result = save_attendance(student_id)
+            if student_id not in last_seen or now_time - last_seen[student_id] > COOLDOWN:
+                result = save_attendance(student_id)
+                last_seen[student_id] = now_time
 
-            if student_id not in last_seen or now - last_seen[student_id] > COOLDOWN:
-                last_seen[student_id] = now  
-
-            if result == "inserted":
-                message = f"{name} Present ✅"
-                message_time = time()
-                print(f"{name} -> inserted ({confidence*100:.2f}%)")
-
-                countdown_start = None  # reset ถ้าเจอคนใหม่
-                last_person = name
-
-            elif result == "already":
-                message = f"{name} Already Checked In ❌"
-                message_time = time()
-                print(f"{name} -> already ({confidence*100:.2f}%)")
-
-                if last_person != name:
-                    countdown_start = time()
+                if result == "inserted":
+                    message = f"{name} Present ✅"
+                    print(f"{name} -> inserted ({confidence*100:.2f}%)")
+                    countdown_start = None
                     last_person = name
-                elif countdown_start is None:
-                    countdown_start = time()
+                elif result == "already":
+                    message = f"{name} Already Checked In ❌"
+                    print(f"{name} -> already ({confidence*100:.2f}%)")
+                    if last_person != name or countdown_start is None:
+                        countdown_start = time()
+                        last_person = name
 
         color = (0,255,0) if confidence>0.80 else (0,0,255)
         cv2.rectangle(frame,(x,y),(x+w,y+h),color,2)
@@ -197,5 +185,3 @@ while True:
 # --------------------------
 cap.release()
 cv2.destroyAllWindows()
-
-print("Q")
