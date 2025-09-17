@@ -1,10 +1,10 @@
-import sys, os, cv2, numpy as np, pymysql, json, requests
+import sys, os, cv2, numpy as np, pymysql, json, gdown
 from tensorflow.keras.models import load_model
 from datetime import datetime
 from time import time
 
 # --------------------------
-# path base ของ project
+# Base path ของ project
 # --------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -15,10 +15,10 @@ COURSE_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 11110
 print(f"เริ่มเช็คชื่อวิชา: {COURSE_ID}")
 
 # --------------------------
-# DB config (ปรับให้ตรงกับ DB ภายนอกของคุณ)
+# DB config
 # --------------------------
 db_config = {
-    'host': 'your_db_host',          # ตัวอย่าง: "db123.host.com"
+    'host': 'YOUR_DB_HOST',  # ตัวอย่าง: 'sql123.host.com'
     'user': 'cedubruc_attendance_system',
     'password': 'LS46s3Ue4w75YUdCr9Qd',
     'database': 'cedubruc_attendance_system',
@@ -26,47 +26,28 @@ db_config = {
 }
 
 # --------------------------
-# ฟังก์ชันบันทึก attendance
+# โหลดไฟล์ model + label_map จาก Google Drive ถ้ายังไม่มี
 # --------------------------
-def save_attendance(student_id):
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    time_str = now.strftime("%H:%M:%S")
+MODEL_PATH = os.path.join(BASE_DIR, 'face_recognition_model.h5')
+LABEL_PATH = os.path.join(BASE_DIR, 'label_map.json')
 
-    conn = pymysql.connect(**db_config, cursorclass=pymysql.cursors.DictCursor)
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM attendance WHERE student_id=%s AND course_id=%s AND date=%s",
-                           (student_id, COURSE_ID, today_str))
-            if cursor.fetchone():
-                return "already"
-            cursor.execute("INSERT INTO attendance (student_id, course_id, date, time_in, status) VALUES (%s,%s,%s,%s,'present')",
-                           (student_id, COURSE_ID, today_str, time_str))
-            conn.commit()
-            return "inserted"
-    finally:
-        conn.close()
+# ใส่ File ID ของ Google Drive
+MODEL_FILE_ID = "YOUR_MODEL_FILE_ID"
+LABEL_FILE_ID = "YOUR_LABEL_FILE_ID"
 
-# --------------------------
-# ดาวน์โหลด label_map.json จาก Google Drive หากยังไม่มี
-# --------------------------
-LABEL_FILE = os.path.join(BASE_DIR, 'label_map.json')
-LABEL_URL = "https://drive.google.com/uc?export=download&id=1xI1LYLUoAGdFmj7VXLI0fiZUuEIi_Fpy"
+if not os.path.exists(MODEL_PATH):
+    print("ดาวน์โหลด face_recognition_model.h5 จาก Google Drive...")
+    gdown.download(f"https://drive.google.com/uc?id={MODEL_FILE_ID}", MODEL_PATH, quiet=False)
 
-if not os.path.exists(LABEL_FILE):
+if not os.path.exists(LABEL_PATH):
     print("ดาวน์โหลด label_map.json จาก Google Drive...")
-    r = requests.get(LABEL_URL)
-    with open(LABEL_FILE, "wb") as f:
-        f.write(r.content)
-    print("ดาวน์โหลดสำเร็จ")
+    gdown.download(f"https://drive.google.com/uc?id={LABEL_FILE_ID}", LABEL_PATH, quiet=False)
 
 # --------------------------
 # โหลด model + label_map
 # --------------------------
-MODEL_PATH = os.path.join(BASE_DIR, 'face_recognition_model.h5')
 model = load_model(MODEL_PATH)
-
-with open(LABEL_FILE, 'r', encoding='utf-8') as f:
+with open(LABEL_PATH, 'r', encoding='utf-8') as f:
     label_map = json.load(f)
 
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -83,22 +64,40 @@ with conn.cursor() as cursor:
 conn.close()
 
 # --------------------------
+# ฟังก์ชันบันทึก attendance
+# --------------------------
+def save_attendance(student_id):
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M:%S")
+
+    conn = pymysql.connect(**db_config, cursorclass=pymysql.cursors.DictCursor)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM attendance WHERE student_id=%s AND course_id=%s AND date=%s",
+                (student_id, COURSE_ID, today_str)
+            )
+            if cursor.fetchone():
+                return "already"
+            cursor.execute(
+                "INSERT INTO attendance (student_id, course_id, date, time_in, status) VALUES (%s,%s,%s,%s,'present')",
+                (student_id, COURSE_ID, today_str, time_str)
+            )
+            conn.commit()
+            return "inserted"
+    finally:
+        conn.close()
+
+# --------------------------
 # เปิดกล้องเช็คชื่อ
 # --------------------------
 cap = cv2.VideoCapture(0)
-COOLDOWN = 60  # วินาที กัน spam insert DB
+COOLDOWN = 60
 last_seen = {}
-
-# --------------------------
-# ตัวแปรสำหรับข้อความแจ้งเตือน
-# --------------------------
 message = ""
 message_time = 0
-MESSAGE_DURATION = 2  # วินาที
-
-# --------------------------
-# ตัวแปรสำหรับนับถอยหลังปิดกล้อง
-# --------------------------
+MESSAGE_DURATION = 2
 countdown_start = None
 countdown_seconds = 5
 last_person = None
@@ -107,10 +106,8 @@ while True:
     ret, frame = cap.read()
     if not ret:
         break
-
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
-
     current_person = None
 
     for (x, y, w, h) in faces:
@@ -124,7 +121,6 @@ while True:
         if confidence > 0.80 and name in students_map:
             student_id = students_map[name]
             now_time = time()
-
             result = save_attendance(student_id)
 
             if student_id not in last_seen or now_time - last_seen[student_id] > COOLDOWN:
@@ -133,10 +129,9 @@ while True:
             if result == "inserted":
                 message = f"{name} Present ✅"
                 message_time = time()
-                print(f"{name} -> inserted ({confidence*100:.2f}%)")
                 countdown_start = None
                 last_person = name
-
+                print(f"{name} -> inserted ({confidence*100:.2f}%)")
             elif result == "already":
                 message = f"{name} Already Checked In ❌"
                 message_time = time()
@@ -152,9 +147,6 @@ while True:
         cv2.putText(frame, f"{name} {confidence*100:.2f}%", (x,y-10),
                     cv2.FONT_HERSHEY_SIMPLEX,0.8,color,2)
 
-    # --------------------------
-    # แสดงข้อความแจ้งเตือน
-    # --------------------------
     if message and time() - message_time < MESSAGE_DURATION:
         (tw, th), _ = cv2.getTextSize(message, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)
         x = (frame.shape[1] - tw) // 2
@@ -164,9 +156,6 @@ while True:
     else:
         message = ""
 
-    # --------------------------
-    # แสดง countdown ปิดกล้อง
-    # --------------------------
     if countdown_start:
         elapsed = time() - countdown_start
         remaining = countdown_seconds - int(elapsed)
@@ -181,16 +170,11 @@ while True:
             break
 
     cv2.imshow("Face Recognition Attendance", frame)
-
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q') or key == 27:
         print("กดออก -> ปิดกล้องแล้ว...")
         break
 
-# --------------------------
-# ปิดกล้องและหน้าต่างทั้งหมด
-# --------------------------
 cap.release()
 cv2.destroyAllWindows()
-
 print("Q")
