@@ -1,8 +1,7 @@
-import sys, os, cv2, numpy as np, pymysql, json
+import sys, os, cv2, numpy as np, pymysql, json, gdown
 from tensorflow.keras.models import load_model
 from datetime import datetime
 from time import time
-import gdown
 
 # --------------------------
 # path base ของ project
@@ -49,23 +48,26 @@ def save_attendance(student_id):
         conn.close()
 
 # --------------------------
-# โหลด model + label_map
+# โหลดไฟล์โมเดล + label_map จาก Google Drive
 # --------------------------
-MODEL_PATH = os.path.join(BASE_DIR, 'face_recognition_model.h5')
+MODEL_PATH = os.path.join(BASE_DIR, 'face_model.h5')
 LABEL_PATH = os.path.join(BASE_DIR, 'label_map.json')
 
-# ดาวน์โหลดโมเดลจาก Google Drive ถ้าไม่พบ
-MODEL_URL = 'https://drive.google.com/uc?export=download&id=1Uj0RX0hwtWtc6On0zJDYL-Yci0J5MXOH'
+# ลิงก์ไฟล์จาก Google Drive (แก้เป็นของสหายเอง)
+MODEL_URL = "https://drive.google.com/uc?export=download&id=1isj1GNME9E_8glCfM0UCeaCLtUVqhd3V"
+LABEL_URL = "https://drive.google.com/uc?export=download&id=1Uj0RX0hwtWtc6On0zJDYL-Yci0J5MXOH"
+
 if not os.path.exists(MODEL_PATH):
-    print("ดาวน์โหลดโมเดลจาก Google Drive...")
+    print("🔽 โหลด face_model.h5 จาก Google Drive ...")
     gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
 
-# ดาวน์โหลด label_map.json จาก URL ของคุณ (แก้เป็นของจริง)
-LABEL_URL = 'https://raw.githubusercontent.com/username/repo/main/label_map.json'
 if not os.path.exists(LABEL_PATH):
-    print("ดาวน์โหลด label_map.json จาก GitHub...")
+    print("🔽 โหลด label_map.json จาก Google Drive ...")
     gdown.download(LABEL_URL, LABEL_PATH, quiet=False)
 
+# --------------------------
+# โหลด model + label_map
+# --------------------------
 model = load_model(MODEL_PATH)
 with open(LABEL_PATH, 'r', encoding='utf-8') as f:
     label_map = json.load(f)
@@ -135,13 +137,15 @@ while True:
                 message = f"{name} Present ✅"
                 message_time = time()
                 print(f"{name} -> inserted ({confidence*100:.2f}%)")
-                countdown_start = None
+
+                countdown_start = None  # reset ถ้าเจอคนใหม่
                 last_person = name
 
             elif result == "already":
                 message = f"{name} Already Checked In ❌"
                 message_time = time()
                 print(f"{name} -> already ({confidence*100:.2f}%)")
+
                 if last_person != name:
                     countdown_start = time()
                     last_person = name
@@ -195,5 +199,3 @@ cap.release()
 cv2.destroyAllWindows()
 
 print("Q")
-
-
